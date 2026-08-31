@@ -35,7 +35,7 @@ def send_email(posts):
     body += "</ul>"
 
     msg = MIMEText(body, "html", "utf-8")
-    msg["Subject"] = f"[뽐뿌 알림] 추천 10 이상 인기글 {len(posts)}건"
+    msg["Subject"] = f"[뽐뿌 알림] 추천 {THRESHOLD} 이상 인기글 {len(posts)}건"
     msg["From"] = user
     msg["To"] = "badungi@naver.com"
 
@@ -70,7 +70,7 @@ def check_posts():
             continue
 
         list_items = soup.select("ul.bbsList li")
-        print(f"  -> {len(list_items)}개 행 발견")
+        print(f"  -> {len(list_items)}개 행 탐색 중")
 
         for li in list_items:
             try:
@@ -91,35 +91,38 @@ def check_posts():
                 title_tag = li.select_one(".title, .cont, strong") or link_tag
                 title = title_tag.get_text(strip=True)
 
-                # 추천수 탐색 (모바일 뽐뿌는 추천이 있을 때 .rec, .recom, 혹은 '추천 - 비추천' 텍스트가 표시됨)
                 upvotes = 0
+
+                # 1. 뽐뿌 모바일의 추천수 영역 전용 클래스 탐색
+                rec_elem = li.select_one("span.rec, span.recom, span.recom_num, span.vote")
                 
-                # 1. 추천 태그 직접 검색
-                rec_elem = li.select_one(".rec, .recom, .list_comment, em")
-                if rec_elem:
+                # 2. 전용 태그가 없으면 info/desc 하위의 span들 중 추천 패턴만 엄격하게 검별
+                if not rec_elem:
+                    for sp in li.select(".info span, .desc span, span"):
+                        txt = sp.get_text(strip=True)
+                        # 날짜(예: 08-31, 24.08.31) 형태 제외하고 순수 '숫자 - 숫자' 형태만 검사
+                        if "-" in txt and not any(sep in txt for sep in [":", "/", "."]):
+                            parts = txt.split("-")
+                            if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                                # 추천수가 확실한 경우
+                                upvotes = int(parts[0].strip())
+                                break
+                else:
                     rec_txt = rec_elem.get_text(strip=True)
-                    match_rec = re.search(r'(\d+)\s*-\s*(\d+)', rec_txt)
+                    match_rec = re.search(r'(\d+)', rec_txt)
                     if match_rec:
                         upvotes = int(match_rec.group(1))
-                    elif rec_txt.isdigit():
-                        upvotes = int(rec_txt)
 
-                # 2. 태그로 못 찾았을 경우 li 전체 텍스트에서 '숫자 - 숫자' 패턴 탐색
-                if upvotes == 0:
-                    li_text = li.get_text(" ", strip=True)
-                    vote_match = re.search(r'(\d+)\s*-\s*(\d+)', li_text)
-                    if vote_match:
-                        upvotes = int(vote_match.group(1))
-
-                # 디버깅 출력 (추천수가 1 이상인 것만 강조 출력)
+                # 디버깅 콘솔 출력
                 if upvotes > 0:
                     print(f"  [확인] 글번호: {post_id} | ★추천: {upvotes} | 제목: {title[:20]}...")
 
+                # 추천수 10 이상 & 미발송 건만 추출
                 if upvotes >= THRESHOLD and post_id not in sent_ids:
                     if not any(p["id"] == post_id for p in new_alerts):
                         full_link = f"https://www.ppomppu.co.kr/zboard/view.php?id=money&no={post_id}"
                         new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
-                        print(f"    ▶ [발송 대상 추가] [{upvotes}추천] {title[:25]}")
+                        print(f"    ▶ [발송 대상 확정] [{upvotes}추천] {title[:25]}")
             except Exception:
                 continue
 
@@ -130,7 +133,7 @@ def check_posts():
         send_email(new_alerts)
         save_sent_ids([p["id"] for p in new_alerts])
     else:
-        print("\n신규 알림 대상 없음 (기준 충족 글 없음)")
+        print("\n신규 알림 대상 없음")
 
 if __name__ == "__main__":
     check_posts()
