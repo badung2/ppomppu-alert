@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 HISTORY_FILE = "sent_ids.txt"
 BASE_URL = "https://m.ppomppu.co.kr/new/bbs_list.php?id=money&page="
 THRESHOLD = 10  # 알림 기준 추천수
-MAX_PAGES = 2   # 1~2페이지 탐색 (약 30~40건 확인)
+MAX_PAGES = 2   # 1~2페이지 탐색
 
 def load_sent_ids():
     if os.path.exists(HISTORY_FILE):
@@ -59,7 +59,7 @@ def check_posts():
 
     for page in range(1, MAX_PAGES + 1):
         target_url = f"{BASE_URL}{page}"
-        print(f"--- [{page}페이지 탐색 시작] ---")
+        print(f"=== [{page}페이지 탐색 시작] ===")
         
         try:
             res = requests.get(target_url, headers=headers, timeout=10)
@@ -70,6 +70,7 @@ def check_posts():
             continue
 
         list_items = soup.select("ul.bbsList li")
+        print(f"  -> {len(list_items)}개 행 발견")
 
         for li in list_items:
             try:
@@ -90,23 +91,38 @@ def check_posts():
                 title_tag = li.select_one(".title, .cont, strong") or link_tag
                 title = title_tag.get_text(strip=True)
 
-                li_text = li.get_text(" ", strip=True)
-                vote_match = re.search(r'(\d+)\s*-\s*(\d+)', li_text)
-                
+                # 추천수 탐색 (모바일 뽐뿌는 추천이 있을 때 .rec, .recom, 혹은 '추천 - 비추천' 텍스트가 표시됨)
                 upvotes = 0
-                if vote_match:
-                    upvotes = int(vote_match.group(1))
+                
+                # 1. 추천 태그 직접 검색
+                rec_elem = li.select_one(".rec, .recom, .list_comment, em")
+                if rec_elem:
+                    rec_txt = rec_elem.get_text(strip=True)
+                    match_rec = re.search(r'(\d+)\s*-\s*(\d+)', rec_txt)
+                    if match_rec:
+                        upvotes = int(match_rec.group(1))
+                    elif rec_txt.isdigit():
+                        upvotes = int(rec_txt)
 
-                # 추천수 10 이상 & 기존 미발송 건 & 현재 탐색 목록 내 중복 방지
+                # 2. 태그로 못 찾았을 경우 li 전체 텍스트에서 '숫자 - 숫자' 패턴 탐색
+                if upvotes == 0:
+                    li_text = li.get_text(" ", strip=True)
+                    vote_match = re.search(r'(\d+)\s*-\s*(\d+)', li_text)
+                    if vote_match:
+                        upvotes = int(vote_match.group(1))
+
+                # 디버깅 출력 (추천수가 1 이상인 것만 강조 출력)
+                if upvotes > 0:
+                    print(f"  [확인] 글번호: {post_id} | ★추천: {upvotes} | 제목: {title[:20]}...")
+
                 if upvotes >= THRESHOLD and post_id not in sent_ids:
                     if not any(p["id"] == post_id for p in new_alerts):
                         full_link = f"https://www.ppomppu.co.kr/zboard/view.php?id=money&no={post_id}"
                         new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
-                        print(f"    ★ 대상 추가: [{upvotes}추천] {title[:25]}")
+                        print(f"    ▶ [발송 대상 추가] [{upvotes}추천] {title[:25]}")
             except Exception:
                 continue
 
-        # 페이지 간 0.5초 딜레이
         time.sleep(0.5)
 
     if new_alerts:
@@ -114,7 +130,7 @@ def check_posts():
         send_email(new_alerts)
         save_sent_ids([p["id"] for p in new_alerts])
     else:
-        print("\n신규 알림 대상 없음")
+        print("\n신규 알림 대상 없음 (기준 충족 글 없음)")
 
 if __name__ == "__main__":
     check_posts()
