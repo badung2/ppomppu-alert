@@ -6,7 +6,7 @@ from email.mime.text import MIMEText
 
 HISTORY_FILE = "sent_ids.txt"
 TARGET_URL = "https://ppomppu.co.kr/zboard/zboard.php?id=money&page=1"
-THRESHOLD = 10  # 알림 기준 추천수
+THRESHOLD = 0  # 알림 기준 추천수 (테스트 시 0으로 변경 가능)
 
 def load_sent_ids():
     if os.path.exists(HISTORY_FILE):
@@ -14,19 +14,21 @@ def load_sent_ids():
             return set(line.strip() for line in f if line.strip())
     return set()
 
-def save_sent_id(post_id):
+def save_sent_ids(post_ids):
     with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{post_id}\n")
+        for pid in post_ids:
+            f.write(f"{pid}\n")
 
 def send_email(posts):
     user = os.environ.get("MAIL_USER")
     password = os.environ.get("MAIL_PASS")
     if not user or not password:
+        print("메일 환경변수(MAIL_USER/MAIL_PASS) 누락")
         return
 
-    body = "<h3>[뽐뿌 재테크 포럼] 추천수 10 이상 게시글</h3><ul>"
+    body = "<h3>[뽐뿌 재테크 포럼] 인기 게시글 알림</h3><ul>"
     for post in posts:
-        body += f"<li><b>[{post['votes']}추천]</b> <a href='{post['link']}'>{post['title']}</a></li>"
+        body += f"<li><b>[추천 {post['votes']}]</b> <a href='{post['link']}'>{post['title']}</a></li>"
     body += "</ul>"
 
     msg = MIMEText(body, "html", "utf-8")
@@ -34,59 +36,75 @@ def send_email(posts):
     msg["From"] = user
     msg["To"] = user
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(user, password)
-        server.send_message(msg)
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(user, password)
+            server.send_message(msg)
+        print("메일 발송 성공")
+    except Exception as e:
+        print(f"메일 발송 실패: {e}")
 
 def check_posts():
     sent_ids = load_sent_ids()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    res = requests.get(TARGET_URL, headers=headers)
-    res.encoding = "euc-kr"  # 뽐뿌 기본 인코딩 대응
-    soup = BeautifulSoup(res.text, "html.parser")
-    
-    rows = soup.select("tr.baseList")
-    new_alerts = []
+    try:
+        res = requests.get(TARGET_URL, headers=headers, timeout=10)
+        res.encoding = "euc-kr"
+        soup = BeautifulSoup(res.text, "html.parser")
+    except Exception as e:
+        print(f"웹 요청 실패: {e}")
+        return
 
+    new_alerts = []
+    # 뽐뿌 게시글 행 목록 탐색
+    rows = soup.select("tr.list0, tr.list1, tr.baseList")
+    
     for row in rows:
         try:
-            # 추천수 파싱 (추천 - 비추천 형식)
-            votes_elem = row.select_one("td.baseList-rec")
-            if not votes_elem:
+            # 제목 태그 찾기
+            title_tag = row.select_one("a[href*='view.php?id=money']")
+            if not title_tag:
                 continue
-            
-            votes_text = votes_elem.get_text(strip=True)
-            if "-" in votes_text:
-                upvotes = int(votes_text.split("-")[0].strip())
-            else:
-                upvotes = int(votes_text) if votes_text.isdigit() else 0
 
-            if upvotes >= THRESHOLD:
-                title_elem = row.select_one("a.baseList-title")
-                if not title_elem:
-                    continue
-                
-                href = title_elem.get("href", "")
-                title = title_elem.get_text(strip=True)
-                
-                # 게시글 번호(no) 추출
-                post_id = href.split("no=")[-1].split("&")[0] if "no=" in href else href
-                
-                if post_id not in sent_ids:
-                    full_link = f"https://ppomppu.co.kr/zboard/{href}" if not href.startswith("http") else href
-                    new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
-                    save_sent_id(post_id)
-        except Exception:
+            href = title_tag.get("href", "")
+            title = title_tag.get_text(strip=True)
+            if not title:
+                continue
+
+            # 글 번호(no=...) 추출
+            post_id = ""
+            if "no=" in href:
+                post_id = href.split("no=")[-1].split("&")[0]
+            if not post_id:
+                continue
+
+            # 추천수 영역 탐색 (보통 td 중 숫자 - 숫자 형태)
+            upvotes = 0
+            tds = row.find_all("td")
+            for td in tds:
+                txt = td.get_text(strip=True)
+                if "-" in txt:
+                    parts = txt.split("-")
+                    if parts[0].strip().isdigit():
+                        upvotes = int(parts[0].strip())
+                        break
+
+            # 추천수가 기준치 이상이고 아직 안 보낸 글인 경우
+            if upvotes >= THRESHOLD and post_id not in sent_ids:
+                full_link = f"https://ppomppu.co.kr/zboard/{href}" if not href.startswith("http") else href
+                new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
+        except Exception as e:
             continue
 
     if new_alerts:
+        print(f"대상 게시글 발견: {len(new_alerts)}건")
         send_email(new_alerts)
-        print(f"새로운 게시글 {len(new_alerts)}건 발송 완료")
+        save_sent_ids([p["id"] for p in new_alerts])
     else:
-        print("신규 알림 대상 없음")
+        print("신규 알림 대상 없음 (조건 만족 글 없음)")
 
 if __name__ == "__main__":
     check_posts()
