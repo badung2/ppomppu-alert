@@ -1,13 +1,15 @@
 import os
 import re
 import smtplib
+import time
 import requests
 from bs4 import BeautifulSoup
 from email.mime.text import MIMEText
 
 HISTORY_FILE = "sent_ids.txt"
-TARGET_URL = "https://m.ppomppu.co.kr/new/bbs_list.php?id=money"
+BASE_URL = "https://m.ppomppu.co.kr/new/bbs_list.php?id=money&page="
 THRESHOLD = 10  # 알림 기준 추천수
+MAX_PAGES = 2   # 1~2페이지 탐색 (약 30~40건 확인)
 
 def load_sent_ids():
     if os.path.exists(HISTORY_FILE):
@@ -53,67 +55,66 @@ def check_posts():
         "Accept-Language": "ko-KR,ko;q=0.9"
     }
     
-    try:
-        res = requests.get(TARGET_URL, headers=headers, timeout=10)
-        res.encoding = "euc-kr"
-        soup = BeautifulSoup(res.text, "html.parser")
-    except Exception as e:
-        print(f"웹 요청 실패: {e}")
-        return
-
-    list_items = soup.select("ul.bbsList li")
     new_alerts = []
-    
-    print(f"총 {len(list_items)}개 항목 탐색 시작")
 
-    for li in list_items:
+    for page in range(1, MAX_PAGES + 1):
+        target_url = f"{BASE_URL}{page}"
+        print(f"--- [{page}페이지 탐색 시작] ---")
+        
         try:
-            # 공지글/배너 제외
-            classes = li.get("class", [])
-            if "notice" in classes or "line" in classes:
-                continue
-                
-            # 링크 태그 탐색
-            link_tag = li.select_one("a[href*='bbs_view.php']")
-            if not link_tag:
-                continue
-
-            href = link_tag.get("href", "")
-            
-            # 글 번호(no=...) 추출
-            match_no = re.search(r'no=(\d+)', href)
-            if not match_no:
-                continue
-            post_id = match_no.group(1)
-
-            # 제목 추출
-            title_tag = li.select_one(".title, .cont, strong") or link_tag
-            title = title_tag.get_text(strip=True)
-
-            # li 전체 텍스트에서 '숫자 - 숫자' 형태의 추천-비추천 패턴 추출
-            li_text = li.get_text(" ", strip=True)
-            vote_match = re.search(r'(\d+)\s*-\s*(\d+)', li_text)
-            
-            upvotes = 0
-            if vote_match:
-                upvotes = int(vote_match.group(1))
-            
-            # 디버깅 출력
-            print(f"  [확인] 글번호: {post_id} | 추천수: {upvotes} | 제목: {title[:20]}...")
-
-            if upvotes >= THRESHOLD and post_id not in sent_ids:
-                full_link = f"https://www.ppomppu.co.kr/zboard/view.php?id=money&no={post_id}"
-                new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
-                print(f"    ★ 조건 만족 대상 추가: [{upvotes}추천] {title[:25]}")
+            res = requests.get(target_url, headers=headers, timeout=10)
+            res.encoding = "euc-kr"
+            soup = BeautifulSoup(res.text, "html.parser")
         except Exception as e:
+            print(f"{page}페이지 요청 실패: {e}")
             continue
 
+        list_items = soup.select("ul.bbsList li")
+
+        for li in list_items:
+            try:
+                classes = li.get("class", [])
+                if "notice" in classes or "line" in classes:
+                    continue
+                    
+                link_tag = li.select_one("a[href*='bbs_view.php']")
+                if not link_tag:
+                    continue
+
+                href = link_tag.get("href", "")
+                match_no = re.search(r'no=(\d+)', href)
+                if not match_no:
+                    continue
+                post_id = match_no.group(1)
+
+                title_tag = li.select_one(".title, .cont, strong") or link_tag
+                title = title_tag.get_text(strip=True)
+
+                li_text = li.get_text(" ", strip=True)
+                vote_match = re.search(r'(\d+)\s*-\s*(\d+)', li_text)
+                
+                upvotes = 0
+                if vote_match:
+                    upvotes = int(vote_match.group(1))
+
+                # 추천수 10 이상 & 기존 미발송 건 & 현재 탐색 목록 내 중복 방지
+                if upvotes >= THRESHOLD and post_id not in sent_ids:
+                    if not any(p["id"] == post_id for p in new_alerts):
+                        full_link = f"https://www.ppomppu.co.kr/zboard/view.php?id=money&no={post_id}"
+                        new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
+                        print(f"    ★ 대상 추가: [{upvotes}추천] {title[:25]}")
+            except Exception:
+                continue
+
+        # 페이지 간 0.5초 딜레이
+        time.sleep(0.5)
+
     if new_alerts:
-        print(f"총 {len(new_alerts)}건 알림 대상 발견 -> 메일 전송 시작")
+        print(f"\n총 {len(new_alerts)}건 알림 대상 발견 -> 메일 전송 시작")
         send_email(new_alerts)
         save_sent_ids([p["id"] for p in new_alerts])
     else:
-        print("신규 알림 대상 없음")
+        print("\n신규 알림 대상 없음")
 
 if __name__ == "__main__":
     check_posts()
