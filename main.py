@@ -35,7 +35,7 @@ def send_email(posts):
     msg = MIMEText(body, "html", "utf-8")
     msg["Subject"] = f"[뽐뿌 알림] 추천 10 이상 인기글 {len(posts)}건"
     msg["From"] = user
-    msg["To"] = user
+    msg["To"] = "badungi@naver.com"
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
