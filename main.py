@@ -1,13 +1,13 @@
 import os
+import re
 import smtplib
 import requests
 from bs4 import BeautifulSoup
 from email.mime.text import MIMEText
 
 HISTORY_FILE = "sent_ids.txt"
-# 클라우드 차단 우회 및 파싱이 간결한 모바일 주소 사용
 TARGET_URL = "https://m.ppomppu.co.kr/new/bbs_list.php?id=money"
-THRESHOLD = 10  # 알림 기준 추천수 (테스트 시 0으로 변경 가능)
+THRESHOLD = 10  # 알림 기준 추천수
 
 def load_sent_ids():
     if os.path.exists(HISTORY_FILE):
@@ -27,7 +27,7 @@ def send_email(posts):
         print("메일 환경변수(MAIL_USER/MAIL_PASS) 누락")
         return
 
-    body = "<h3>[뽐뿌 재테크 포럼] 추천수 알림</h3><ul>"
+    body = "<h3>[뽐뿌 재테크 포럼] 인기 게시글 알림</h3><ul>"
     for post in posts:
         body += f"<li><b>[추천 {post['votes']}]</b> <a href='{post['link']}'>{post['title']}</a></li>"
     body += "</ul>"
@@ -41,7 +41,7 @@ def send_email(posts):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(user, password)
             server.send_message(msg)
-        print("이메일 발송 성공")
+        print("이메일 발송 성공!")
     except Exception as e:
         print(f"이메일 발송 실패: {e}")
 
@@ -61,7 +61,6 @@ def check_posts():
         print(f"웹 요청 실패: {e}")
         return
 
-    # 모바일 뽐뿌 게시글 리스트 항목 탐색
     list_items = soup.select("ul.bbsList li")
     new_alerts = []
     
@@ -69,55 +68,52 @@ def check_posts():
 
     for li in list_items:
         try:
-            # 공지글 제외
-            if "notice" in li.get("class", []):
+            # 공지글/배너 제외
+            classes = li.get("class", [])
+            if "notice" in classes or "line" in classes:
                 continue
                 
-            link_tag = li.select_one("a.title")
+            # 링크 태그 탐색
+            link_tag = li.select_one("a[href*='bbs_view.php']")
             if not link_tag:
                 continue
 
             href = link_tag.get("href", "")
-            title_span = link_tag.select_one("span.cont") or link_tag
-            title = title_span.get_text(strip=True)
-
+            
             # 글 번호(no=...) 추출
-            post_id = ""
-            if "no=" in href:
-                post_id = href.split("no=")[-1].split("&")[0]
-            if not post_id:
+            match_no = re.search(r'no=(\d+)', href)
+            if not match_no:
                 continue
+            post_id = match_no.group(1)
 
-            # 추천수 영역 확인 (span.rec 또는 숫자-숫자 텍스트)
+            # 제목 추출
+            title_tag = li.select_one(".title, .cont, strong") or link_tag
+            title = title_tag.get_text(strip=True)
+
+            # li 전체 텍스트에서 '숫자 - 숫자' 형태의 추천-비추천 패턴 추출
+            li_text = li.get_text(" ", strip=True)
+            vote_match = re.search(r'(\d+)\s*-\s*(\d+)', li_text)
+            
             upvotes = 0
-            rec_tag = li.select_one("span.rec")
-            if rec_tag:
-                txt = rec_tag.get_text(strip=True)
-                if "-" in txt:
-                    txt = txt.split("-")[0].strip()
-                upvotes = int(txt) if txt.isdigit() else 0
-            else:
-                # 일반 텍스트에서 추천수 파싱
-                for span in li.select("span"):
-                    txt = span.get_text(strip=True)
-                    if "-" in txt and txt.replace("-", "").isdigit():
-                        upvotes = int(txt.split("-")[0].strip())
-                        break
+            if vote_match:
+                upvotes = int(vote_match.group(1))
+            
+            # 디버깅 출력
+            print(f"  [확인] 글번호: {post_id} | 추천수: {upvotes} | 제목: {title[:20]}...")
 
-            # 추천 기준 확인 및 미발송 건 필터링
             if upvotes >= THRESHOLD and post_id not in sent_ids:
                 full_link = f"https://www.ppomppu.co.kr/zboard/view.php?id=money&no={post_id}"
                 new_alerts.append({"id": post_id, "title": title, "link": full_link, "votes": upvotes})
-                print(f"-> 대상 발견: [{upvotes}추천] {title} (번호: {post_id})")
+                print(f"    ★ 조건 만족 대상 추가: [{upvotes}추천] {title[:25]}")
         except Exception as e:
             continue
 
     if new_alerts:
-        print(f"총 {len(new_alerts)}건 알림 발송 진행")
+        print(f"총 {len(new_alerts)}건 알림 대상 발견 -> 메일 전송 시작")
         send_email(new_alerts)
         save_sent_ids([p["id"] for p in new_alerts])
     else:
-        print("신규 알림 대상 없음 (조건 만족 글 없음)")
+        print("신규 알림 대상 없음")
 
 if __name__ == "__main__":
     check_posts()
