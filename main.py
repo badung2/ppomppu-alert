@@ -7,13 +7,14 @@ from bs4 import BeautifulSoup
 from email.mime.text import MIMEText
 
 HISTORY_FILE = "sent_ids.txt"
+MAX_HISTORY_COUNT = 1500  # 저장 파일이 무한정 커지지 않도록 최근 1,500건만 유지 (약 25KB 고정)
 
 # [설정] 뽐뿌
 PPOMPPU_URL = "https://m.ppomppu.co.kr/new/bbs_list.php?id=money&page="
 PPOMPPU_THRESHOLD = 10  # 알림 기준 추천수
 PPOMPPU_MAX_PAGES = 2   # 탐색할 페이지 수
 
-# [설정] 디시인사이드 (추후 원하는 갤러리 URL을 배열에 추가 가능)
+# [설정] 디시인사이드 (원하는 갤러리 URL을 배열에 추가 가능)
 DC_TARGET_URLS = [
     "https://gall.dcinside.com/mgallery/board/lists/?id=mounjaro&sort_type=N&search_head=80&page=1"
 ]
@@ -24,9 +25,24 @@ def load_sent_ids():
             return set(line.strip() for line in f if line.strip())
     return set()
 
-def save_sent_ids(post_ids):
-    with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-        for pid in post_ids:
+def save_sent_ids(new_post_ids):
+    existing_ids = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            existing_ids = [line.strip() for line in f if line.strip()]
+
+    # 중복 제거하며 새 ID 목록 추가
+    seen = set(existing_ids)
+    for pid in new_post_ids:
+        if pid not in seen:
+            existing_ids.append(pid)
+            seen.add(pid)
+
+    # 오래된 데이터는 날리고 최근 MAX_HISTORY_COUNT 개수만 보관
+    truncated_ids = existing_ids[-MAX_HISTORY_COUNT:]
+
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        for pid in truncated_ids:
             f.write(f"{pid}\n")
 
 def send_email(posts):
@@ -142,7 +158,7 @@ def check_dcinside(sent_ids):
 
     alerts = []
 
-    for target_url in DC_TARGET_URLS:
+    for idx, target_url in enumerate(DC_TARGET_URLS):
         try:
             res = requests.get(target_url, headers=headers, timeout=10)
             soup = BeautifulSoup(res.text, "html.parser")
@@ -151,7 +167,7 @@ def check_dcinside(sent_ids):
             continue
 
         gallery_title_elem = soup.select_one(".page_head .fl h2, .gall_title")
-        board_name = gallery_title_elem.get_text(strip=True) if gallery_title_elem else "마이너 갤러리"
+        board_name = gallery_title_elem.get_text(strip=True) if gallery_title_elem else f"게시판{idx}"
 
         rows = soup.select("table.gall_list tbody tr.ub-content")
 
@@ -164,7 +180,9 @@ def check_dcinside(sent_ids):
                 if not num_td or not num_td.get_text(strip=True).isdigit():
                     continue
                 post_num = num_td.get_text(strip=True)
-                post_id = f"dc_{board_name}_{post_num}"
+                
+                # 배열 인덱스를 적용한 고유 ID 생성 (예: dc_0_12345)
+                post_id = f"dc_{idx}_{post_num}"
 
                 title_tag = tr.select_one("td.gall_tit a")
                 if not title_tag:
