@@ -25,6 +25,7 @@ def save_sent_ids(post_ids):
 def send_email(posts):
     user = os.environ.get("MAIL_USER")
     password = os.environ.get("MAIL_PASS")
+    target_mail = os.environ.get("TARGET_MAIL")
     if not user or not password:
         print("메일 환경변수(MAIL_USER/MAIL_PASS) 누락")
         return
@@ -37,7 +38,7 @@ def send_email(posts):
     msg = MIMEText(body, "html", "utf-8")
     msg["Subject"] = f"[뽐뿌 알림] 추천 {THRESHOLD} 이상 인기글 {len(posts)}건"
     msg["From"] = user
-    msg["To"] = "badungi@naver.com"
+    msg["To"] = target_mail
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
