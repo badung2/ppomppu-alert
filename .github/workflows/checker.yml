@@ -27,6 +27,7 @@ jobs:
         env:
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          TARGET_MAIL: ${{ secrets.TARGET_MAIL }}
         run: python main.py
 
       - name: 발송 이력 갱신
