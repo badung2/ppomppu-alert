@@ -16,7 +16,8 @@ PPOMPPU_MAX_PAGES = 2   # 탐색할 페이지 수
 
 # [설정] 디시인사이드 (원하는 갤러리 URL을 배열에 추가 가능)
 DC_TARGET_URLS = [
-    "https://gall.dcinside.com/mgallery/board/lists/?id=mounjaro&sort_type=N&search_head=80&page=1"
+    "https://gall.dcinside.com/mgallery/board/lists/?id=mounjaro&sort_type=N&search_head=80&page=1",
+    "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize&exception_mode=recommend"
 ]
 
 def load_sent_ids():
